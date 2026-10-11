@@ -1,0 +1,49 @@
+# XcodeGen spec. `xcodegen generate` writes ScreenExt.xcodeproj and Info.plist from this file.
+name: ScreenExt
+
+options:
+  bundleIdPrefix: com.screenext
+  deploymentTarget:
+    iOS: "16.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"                 # stay in Swift 5 language mode even on Xcode 26 (Swift 6 toolchain)
+    SWIFT_STRICT_CONCURRENCY: minimal
+    TARGETED_DEVICE_FAMILY: "1,2"        # iPhone + iPad
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+targets:
+  ScreenExt:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.screenext.client   # Sideloadly can rewrite this for a free Apple ID
+        PRODUCT_NAME: ScreenExt
+    dependencies:
+      - sdk: VideoToolbox.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+      - sdk: Network.framework
+      - sdk: CoreMedia.framework
+      - sdk: CoreVideo.framework
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Screen Extension
+        UILaunchScreen: {}               # REQUIRED: without a launch screen iOS letterboxes the app
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIRequiresFullScreen: true       # lets iPad honour the landscape-only restriction
+        UIStatusBarHidden: true
+        NSLocalNetworkUsageDescription: "Screen Extension connects to your PC over your local network or USB to show its extended display and send touch input."
