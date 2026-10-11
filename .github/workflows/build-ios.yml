@@ -8,6 +8,83 @@ on:
 
 jobs:
   build:
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain info
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          swift --version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Build unsigned archive
+        run: |
+          set -o pipefail
+          mkdir -p build
+          # Allow ad-hoc (local) signing during archiving to let Xcode generate proper build artifacts.
+          # We strip this local signature in the next step.
+          xcodebuild archive \
+            -project ScreenExt.xcodeproj \
+            -scheme ScreenExt \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/ScreenExt.xcarchive" \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=YES \
+            2>&1 | tee build/xcodebuild.log
+
+      - name: Package unsigned IPA
+        run: |
+          set -e
+          APP=$(find build/ScreenExt.xcarchive/Products -maxdepth 3 -name '*.app' -type d | head -n 1)
+          test -n "$APP" || { echo "No .app found in archive"; find build/ScreenExt.xcarchive | head -50; exit 1; }
+          
+          rm -rf Payload ScreenExt-unsigned.ipa
+          mkdir Payload
+          cp -R "$APP" Payload/
+          
+          # Strip the ad-hoc local signature and provisioning profiles to make it truly unsigned
+          echo "Stripping code signatures..."
+          rm -rf "Payload/$(basename "$APP")/_CodeSignature"
+          rm -f "Payload/$(basename "$APP")/embedded.mobileprovision"
+          
+          zip -qry ScreenExt-unsigned.ipa Payload
+          unzip -l ScreenExt-unsigned.ipa | head -15
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScreenExt-unsigned-ipa
+          path: ScreenExt-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: build/xcodebuild.log
+          if-no-files-found: ignorename: Build unsigned iOS IPA
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
     # macos-14 is being retired (fully unsupported 2026-11-02); macos-26 ships Xcode 26.x.
     runs-on: macos-26
     timeout-minutes: 30
