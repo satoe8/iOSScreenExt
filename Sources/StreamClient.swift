@@ -73,6 +73,7 @@ final class StreamClient {
     var onVideo: ((VideoPacket) -> Void)?
     var onState: ((String) -> Void)?
     var onRTT: ((Double) -> Void)?          // milliseconds
+    var onConnectionChanged: ((Bool) -> Void)?   // true once the transport is up, false when it drops
 
     private let q = DispatchQueue(label: "stream.net", qos: .userInteractive)
     private var listener: NWListener?
@@ -82,6 +83,8 @@ final class StreamClient {
     private var rx = Data()
     private var pingTimer: DispatchSourceTimer?
     private var lastKeyReq: UInt64 = 0
+    private var lastRxUs: UInt64 = 0
+    private var isConnected = false
 
     // UDP reassembly
     private struct Pending { var count: Int; var got: Int; var parts: [Data?] }
@@ -90,14 +93,24 @@ final class StreamClient {
     // MARK: public API
 
     func start(_ mode: StreamMode) {
+        q.async { self.startLocked(mode) }
+    }
+
+    /// Drop the current connection and begin again with the last mode (e.g. after the app returns from the background).
+    func restart() {
         q.async {
-            self.teardown()
-            self.mode = mode
-            switch mode {
-            case .listenTCP(let port):          self.startListener(port)
-            case .connectTCP(let host, let port): self.connectTCP(host, port)
-            case .udp(let host, let port):      self.startUDP(host, port)
-            }
+            guard let m = self.mode else { return }
+            self.startLocked(m)
+        }
+    }
+
+    private func startLocked(_ mode: StreamMode) {
+        teardown()
+        self.mode = mode
+        switch mode {
+        case .listenTCP(let port):            startListener(port)
+        case .connectTCP(let host, let port): connectTCP(host, port)
+        case .udp(let host, let port):        startUDP(host, port)
         }
     }
 
@@ -130,7 +143,14 @@ final class StreamClient {
 
     // MARK: lifecycle
 
+    private func setConnected(_ v: Bool) {
+        guard v != isConnected else { return }
+        isConnected = v
+        onConnectionChanged?(v)
+    }
+
     private func teardown() {
+        setConnected(false)
         listener?.cancel(); listener = nil
         conn?.cancel(); conn = nil
         pingTimer?.cancel(); pingTimer = nil
@@ -187,6 +207,8 @@ final class StreamClient {
             switch st {
             case .ready:
                 self.onState?(self.isUDP ? "UDP ready" : "Connected")
+                self.lastRxUs = nowUs()
+                self.setConnected(true)
                 self.startPing()
                 self.sendPing()                        // for UDP this is also the "hello" that registers us
                 self.isUDP ? self.receiveDatagram(c) : self.receiveStream(c)
@@ -202,6 +224,7 @@ final class StreamClient {
     }
 
     private func connectionLost() {
+        setConnected(false)
         pingTimer?.cancel(); pingTimer = nil
         conn?.cancel(); conn = nil
         guard let m = mode else { return }
@@ -225,9 +248,20 @@ final class StreamClient {
         pingTimer?.cancel()
         let t = DispatchSource.makeTimerSource(queue: q)
         t.schedule(deadline: .now() + 1, repeating: 1)
-        t.setEventHandler { [weak self] in self?.sendPing() }
+        t.setEventHandler { [weak self] in self?.tick() }
         t.resume()
         pingTimer = t
+    }
+
+    /// Once a second: keep-alive ping + watchdog. The host answers every ping, so 5 s of silence means the
+    /// link or the PC is gone (or the app was suspended): reconnect instead of waiting on a dead socket.
+    private func tick() {
+        if conn != nil, lastRxUs != 0, nowUs() &- lastRxUs > 5_000_000 {
+            onState?("No data for 5 s - reconnecting")
+            connectionLost()
+            return
+        }
+        sendPing()
     }
 
     private func sendPing() {
@@ -264,6 +298,7 @@ final class StreamClient {
         c.receive(minimumIncompleteLength: 1, maximumLength: 256 * 1024) { [weak self, weak c] data, _, isComplete, error in
             guard let self = self, let c = c, self.conn === c else { return }
             if let d = data, !d.isEmpty {
+                self.lastRxUs = nowUs()
                 self.rx.append(d)
                 if !self.parseStream() { c.cancel(); self.connectionLost(); return }
             }
@@ -297,7 +332,7 @@ final class StreamClient {
     private func receiveDatagram(_ c: NWConnection) {
         c.receiveMessage { [weak self, weak c] data, _, _, error in
             guard let self = self, let c = c, self.conn === c else { return }
-            if let d = data { self.handleDatagram(d) }
+            if let d = data { self.lastRxUs = nowUs(); self.handleDatagram(d) }
             if error != nil { self.connectionLost(); return }
             self.receiveDatagram(c)
         }

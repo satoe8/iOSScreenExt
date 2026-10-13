@@ -47,5 +47,7 @@ targets:
         UIRequiresFullScreen: true       # lets iPad honour the landscape-only restriction (opts out of Split View)
         UIStatusBarHidden: true
         UIApplicationSupportsIndirectInputEvents: true
+        UIFileSharingEnabled: true              # Documents/ScreenExt.log is readable from the Files app
+        LSSupportsOpeningDocumentsInPlace: true
         ITSAppUsesNonExemptEncryption: false
         NSLocalNetworkUsageDescription: "Screen Extension connects to your PC over your local network or USB to show its extended display and send touch input."
