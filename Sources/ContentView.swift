@@ -35,6 +35,7 @@ final class StreamModel: ObservableObject {
     private var watchdog: DispatchSourceTimer?
     private var autoTask: Task<Void, Never>?
     private var tick = 0
+    static let usbListenPort: UInt16 = 5000      // must match the host's USB device port
 
     init() {
         client.onState = { [weak self] s in
@@ -140,6 +141,7 @@ final class StreamModel: ObservableObject {
         Task { @MainActor in UIApplication.shared.isIdleTimerDisabled = true }   // don't dim/lock while streaming
         AppLog.log("start \(choice) host='\(host)' port=\(port)")
 
+        client.setAlsoListen(port: nil)
         switch choice {
         case .listen:  client.start(.listenTCP(port: port))
         case .connect: client.start(.connectTCP(host: host, port: port))
@@ -172,6 +174,9 @@ final class StreamModel: ObservableObject {
     /// Automatic mode: try the last-used PC immediately, and whenever we are not connected look for the
     /// PC on the local subnet (unicast discovery) and connect to whatever answers. Reconnects forever.
     private func startAuto(savedHost: String, port: UInt16) {
+        // Listen on 5000 as well: this is the port the PC's native USB tunnel connects to, so plugging in the
+        // cable just works. (If the PC reaches us first over USB, that connection simply wins.)
+        client.setAlsoListen(port: Self.usbListenPort)
         if !savedHost.isEmpty {
             client.start(.connectTCP(host: savedHost, port: port))
         }

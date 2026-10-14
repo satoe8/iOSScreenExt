@@ -84,6 +84,7 @@ final class StreamClient {
     private var pingTimer: DispatchSourceTimer?
     private var lastKeyReq: UInt64 = 0
     private var lastRxUs: UInt64 = 0
+    private var alsoListenPort: UInt16?
     private var isConnected = false
 
     // UDP reassembly
@@ -111,6 +112,17 @@ final class StreamClient {
         case .listenTCP(let port):            startListener(port)
         case .connectTCP(let host, let port): connectTCP(host, port)
         case .udp(let host, let port):        startUDP(host, port)
+        }
+        if let p = alsoListenPort, listener == nil { startListener(p, announce: false) }
+    }
+
+    /// Keep a TCP listener open IN ADDITION to the active connection. Automatic mode uses this so the PC can reach
+    /// the app through the USB tunnel (PC connects in) while the app also searches for the PC over Wi-Fi.
+    /// Pass nil to stop doing that (takes effect the next time a mode is started).
+    func setAlsoListen(port: UInt16?) {
+        q.async {
+            self.alsoListenPort = port
+            if let p = port, self.listener == nil { self.startListener(p, announce: false) }
         }
     }
 
@@ -159,7 +171,7 @@ final class StreamClient {
         isUDP = false
     }
 
-    private func startListener(_ port: UInt16) {
+    private func startListener(_ port: UInt16, announce: Bool = true) {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         let params = NWParameters(tls: nil, tcp: tcp)
@@ -170,14 +182,14 @@ final class StreamClient {
         }
         l.stateUpdateHandler = { [weak self] st in
             if case .failed(let e) = st { self?.onState?("Listener failed: \(e)") }
-            if case .ready = st { self?.onState?("Listening on \(port)…") }
+            if announce, case .ready = st { self?.onState?("Listening on \(port)…") }
         }
         l.newConnectionHandler = { [weak self] c in
             self?.q.async { self?.adopt(c) }
         }
         l.start(queue: q)
         listener = l
-        onState?("Listening on \(port)…")
+        if announce { onState?("Listening on \(port)…") }
     }
 
     private func connectTCP(_ host: String, _ port: UInt16) {
