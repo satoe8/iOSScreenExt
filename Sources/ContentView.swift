@@ -39,6 +39,7 @@ final class StreamModel: ObservableObject {
 
     private var mainStalled = false             // watchdog queue only
     private var touchesSent = 0                 // main thread only
+    private var penSent = 0                     // main thread only
     private var timer: Timer?
     private var watchdog: DispatchSourceTimer?
     private var autoTask: Task<Void, Never>?
@@ -232,6 +233,14 @@ final class StreamModel: ObservableObject {
         }
         client.sendTouch(id: id, phase: phase, x: x, y: y, pressure: pressure)
     }
+
+    func pen(_ phase: TouchPhase, _ x: Double, _ y: Double, _ pressure: Double, _ tiltX: Double, _ tiltY: Double, _ rotation: Double) {
+        penSent += 1
+        if phase != .move || penSent <= 5 {
+            AppLog.log("pen #\(penSent) \(phase) x=\(String(format: "%.3f", x)) y=\(String(format: "%.3f", y)) p=\(String(format: "%.2f", pressure))")
+        }
+        client.sendPen(phase: phase, x: x, y: y, pressure: pressure, tiltX: tiltX, tiltY: tiltY, rotation: rotation)
+    }
 }
 
 // MARK: - Root view
@@ -260,10 +269,10 @@ struct ContentView: View {
             Color.black.ignoresSafeArea()
 
             // Always present (so the renderer is attached); covered by the home screen until a PC is connected.
-            MetalVideoView(renderer: model.renderer) { id, phase, x, y, pressure in
-                model.touch(id, phase, x, y, pressure)
-            }
-            .ignoresSafeArea()
+            MetalVideoView(renderer: model.renderer,
+                           onTouch: { id, phase, x, y, pressure in model.touch(id, phase, x, y, pressure) },
+                           onPen: { phase, x, y, pressure, tx, ty, rot in model.pen(phase, x, y, pressure, tx, ty, rot) })
+                .ignoresSafeArea()
 
             if model.running && model.connected {
                 StreamingOverlay(showStats: showStats, fps: model.fps, rttMs: model.rttMs,

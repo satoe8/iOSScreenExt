@@ -193,6 +193,8 @@ final class VideoRenderer: NSObject, MTKViewDelegate {
 final class TouchMTKView: MTKView {
     /// (pointerId, phase, x 0...1, y 0...1 inside the visible video area, pressure 0...1)
     var onTouch: ((UInt8, TouchPhase, Double, Double, Double) -> Void)?
+    /// Apple Pencil: (phase, x, y, pressure, tiltX°, tiltY°, rotation°); x, y in 0...1 inside the visible video area
+    var onPen: ((TouchPhase, Double, Double, Double, Double, Double, Double) -> Void)?
     var contentAspect: () -> CGFloat = { 2556.0 / 1179.0 }
 
     private var ids: [ObjectIdentifier: UInt8] = [:]
@@ -223,6 +225,7 @@ final class TouchMTKView: MTKView {
         let r = fittedVideoRect(in: bounds, contentAspect: contentAspect())
         guard r.width > 0, r.height > 0 else { return }
         for t in touches {
+            if t.type == .pencil { reportPencil(t, phase); continue }      // the Pencil is a pen, not a finger
             guard let pid = id(for: t, create: phase == .down) else { continue }
             let p = t.location(in: self)
             let nx = min(1, max(0, Double((p.x - r.minX) / r.width)))
@@ -233,8 +236,39 @@ final class TouchMTKView: MTKView {
         }
     }
 
+    private func reportPencil(_ t: UITouch, _ phase: TouchPhase) {
+        let r = fittedVideoRect(in: bounds, contentAspect: contentAspect())
+        guard r.width > 0, r.height > 0 else { return }
+        let p = t.location(in: self)
+        let nx = min(1, max(0, Double((p.x - r.minX) / r.width)))
+        let ny = min(1, max(0, Double((p.y - r.minY) / r.height)))
+
+        let maxForce = t.maximumPossibleForce
+        let pressure = maxForce > 0 ? min(1, max(0, Double(t.force / maxForce))) : 0.5
+
+        // Tilt: altitude pi/2 = upright, 0 = flat on the glass; azimuth is the lean direction. Windows wants tilt
+        // as two angles (degrees, -90...90) along X and Y. (Axis signs follow UIKit's y-down; unverified on-device.)
+        let lean = Double.pi / 2 - Double(t.altitudeAngle)
+        let az = t.azimuthUnitVector(in: self)
+        let tiltX = atan2(Double(az.dx) * sin(lean), cos(lean)) * 180 / Double.pi
+        let tiltY = atan2(Double(az.dy) * sin(lean), cos(lean)) * 180 / Double.pi
+        let rotation = Double(t.azimuthAngle(in: self)) * 180 / Double.pi
+
+        onPen?(phase, nx, ny, pressure, tiltX, tiltY, rotation)
+    }
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?)     { report(touches, .down) }
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?)     { report(touches, .move) }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        var fingers = Set<UITouch>()
+        for t in touches {
+            if t.type == .pencil, let samples = event?.coalescedTouches(for: t), !samples.isEmpty {
+                for s in samples { reportPencil(s, .move) }               // every intermediate sample, not just the last
+            } else {
+                fingers.insert(t)
+            }
+        }
+        if !fingers.isEmpty { report(fingers, .move) }
+    }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?)     { report(touches, .up) }
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { report(touches, .cancel) }
 }
@@ -244,16 +278,19 @@ final class TouchMTKView: MTKView {
 struct MetalVideoView: UIViewRepresentable {
     let renderer: VideoRenderer
     let onTouch: (UInt8, TouchPhase, Double, Double, Double) -> Void
+    let onPen: (TouchPhase, Double, Double, Double, Double, Double, Double) -> Void
 
     func makeUIView(context: Context) -> TouchMTKView {
         let v = TouchMTKView(frame: .zero, device: MTLCreateSystemDefaultDevice())
         renderer.attach(to: v)
         v.contentAspect = { [weak renderer] in renderer?.contentAspect ?? 2556.0 / 1179.0 }
         v.onTouch = onTouch
+        v.onPen = onPen
         return v
     }
 
     func updateUIView(_ uiView: TouchMTKView, context: Context) {
         uiView.onTouch = onTouch
+        uiView.onPen = onPen
     }
 }

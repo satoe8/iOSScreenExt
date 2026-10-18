@@ -61,7 +61,7 @@ private let kUdpMagic: UInt16 = 0x4455
 private let kHeaderSize = 12
 
 private enum MsgType: UInt8 {
-    case video = 1, hello = 2, keyframeReq = 3, touch = 4, ping = 5, pong = 6
+    case video = 1, hello = 2, keyframeReq = 3, touch = 4, ping = 5, pong = 6, pen = 7
 }
 
 private func nowUs() -> UInt64 { DispatchTime.now().uptimeNanoseconds / 1000 }
@@ -151,6 +151,24 @@ final class StreamClient {
         p.put8(id); p.put8(phase.rawValue); p.put16(q16(x)); p.put16(q16(y)); p.put16(q16(pressure))
         let payload = p
         q.async { self.send(self.message(.touch, payload)) }
+    }
+
+    /// Apple Pencil sample, sent as a real pen (Windows Ink). x, y, pressure are 0...1 (x, y inside the visible
+    /// area); tilt is in degrees (-90...90); rotation in degrees. Wire format: see PenPayload in Transport.h.
+    func sendPen(phase: TouchPhase, x: Double, y: Double, pressure: Double, tiltX: Double, tiltY: Double, rotation: Double) {
+        func q16(_ v: Double) -> UInt16 { UInt16((min(1, max(0, v)) * 65535).rounded()) }
+        func deg(_ v: Double) -> UInt16 {                      // signed degrees, clamped, two's complement
+            let d = Int(min(90, max(-90, v)).rounded())
+            return UInt16(bitPattern: Int16(clamping: d))
+        }
+        var p = Data()
+        p.put8(phase.rawValue); p.put8(0)                      // flags: barrel/eraser not available on Apple Pencil
+        p.put16(q16(x)); p.put16(q16(y)); p.put16(q16(pressure))
+        p.put16(deg(tiltX)); p.put16(deg(tiltY))
+        let r = ((Int(rotation.rounded()) % 360) + 360) % 360
+        p.put16(UInt16(r))
+        let payload = p
+        q.async { self.send(self.message(.pen, payload)) }
     }
 
     // MARK: lifecycle
