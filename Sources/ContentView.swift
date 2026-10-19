@@ -21,6 +21,7 @@ final class StreamModel: ObservableObject {
     @Published var fps = 0
     @Published var rttMs = 0.0
     @Published var hostName = ""            // friendly PC name once discovery found it
+    @Published var link = ""                // how we are connected: "USB", "Wi-Fi" or "UDP" (from the host's HELLO)
 
     let client = StreamClient()
     let decoder = VideoDecoder()
@@ -57,14 +58,16 @@ final class StreamModel: ObservableObject {
             self.stateLock.lock(); self.connectedFlag = c; self.stateLock.unlock()
             DispatchQueue.main.async {
                 self.connected = c
-                if !c { self.hostName = "" }
+                if !c { self.hostName = ""; self.link = "" }
             }
         }
 
         // HELLO is the first message on every connection and again after a PC-side resolution change.
         client.onHello = { [weak self] info in
             guard let self = self else { return }
-            AppLog.log("hello coded \(info.codedW)x\(info.codedH) crop \(info.cropW)x\(info.cropH) @\(info.fps)")
+            let linkName = info.transport == 1 ? "USB" : (info.transport == 2 ? "UDP" : "Wi-Fi")
+            AppLog.log("hello coded \(info.codedW)x\(info.codedH) crop \(info.cropW)x\(info.cropH) @\(info.fps) via \(linkName)")
+            DispatchQueue.main.async { self.link = linkName }
             self.renderer.setStreamInfo(info)
             self.decodeQueue.async { self.decoder.reset() }
         }
@@ -275,7 +278,7 @@ struct ContentView: View {
                 .ignoresSafeArea()
 
             if model.running && model.connected {
-                StreamingOverlay(showStats: showStats, fps: model.fps, rttMs: model.rttMs,
+                StreamingOverlay(showStats: showStats, link: model.link, fps: model.fps, rttMs: model.rttMs,
                                  onSettings: { showAdvanced = true },
                                  onDisconnect: { model.stop() })
                     .transition(.opacity)
@@ -457,17 +460,31 @@ struct SoftPulse: ViewModifier {
 
 struct StreamingOverlay: View {
     let showStats: Bool
+    let link: String          // "USB" / "Wi-Fi" / "UDP" / ""
     let fps: Int
     let rttMs: Double
     var onSettings: () -> Void
     var onDisconnect: () -> Void
 
+    private var label: String {
+        var text = "Connected"
+        if !link.isEmpty { text += " · " + link }
+        if showStats { text += " · " + String(fps) + " fps · " + String(format: "%.0f", rttMs) + " ms" }
+        return text
+    }
+
     var body: some View {
         VStack {
             HStack(alignment: .top) {
                 HStack(spacing: 6) {
-                    Circle().fill(Color.green).frame(width: 7, height: 7)
-                    Text(showStats ? "Connected · \(fps) fps · \(String(format: "%.0f", rttMs)) ms" : "Connected")
+                    if link == "USB" {
+                        Image(systemName: "cable.connector").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.green)
+                    } else if link == "Wi-Fi" {
+                        Image(systemName: "wifi").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.green)
+                    } else {
+                        Circle().fill(Color.green).frame(width: 7, height: 7)
+                    }
+                    Text(label)
                         .font(.system(size: 12, weight: .medium, design: .rounded).monospacedDigit())
                         .foregroundStyle(Color.white)
                 }

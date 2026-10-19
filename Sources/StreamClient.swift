@@ -22,6 +22,7 @@ struct StreamInfo {
     var codedW = 2556, codedH = 1180
     var cropX = 0, cropY = 0, cropW = 2556, cropH = 1179
     var fps = 60
+    var transport = 0        // 0 Wi-Fi/LAN, 1 USB, 2 UDP (HELLO field added later; 0 if the host doesn't send it)
 }
 
 struct VideoPacket {
@@ -419,6 +420,7 @@ final class StreamClient {
             info.cropX  = Int(payload.u16(6));  info.cropY  = Int(payload.u16(8))
             info.cropW  = Int(payload.u16(10)); info.cropH  = Int(payload.u16(12))
             info.fps    = Int(payload.u16(14))
+            if payload.count >= 18 { info.transport = Int(payload.u16(16)) }
             onHello?(info)
 
         case .video where payload.count > 20:
